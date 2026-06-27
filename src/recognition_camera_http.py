@@ -4,6 +4,7 @@ import time
 from urllib.parse import urlparse
 
 import cv2
+import numpy as np
 from ultralytics import YOLO
 
 
@@ -88,50 +89,17 @@ def get_class_color(label):
     return palette.get(label.lower(), (255, 255, 255))
 
 
-def draw_overlay(frame, result, source, fps, conf_threshold):
-    height, width = frame.shape[:2]
-    overlay = frame.copy()
+DISPLAY_HEIGHT = 500
+PANEL_WIDTH = 290
+PANEL_BG = (22, 22, 42)
+PANEL_ACCENT = (0, 200, 200)
+PANEL_TEXT = (230, 230, 230)
+PANEL_DIM = (160, 160, 180)
+LINE_HEIGHT = 32
 
-    cv2.rectangle(overlay, (10, 10), (width - 10, 170), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
 
-    cv2.putText(
-        frame,
-        "Plant Recognition",
-        (24, 38),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (255, 255, 255),
-        2,
-    )
-    cv2.putText(
-        frame,
-        f"Source: {source}",
-        (24, 64),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (220, 220, 220),
-        1,
-    )
-    cv2.putText(
-        frame,
-        f"Conf >= {conf_threshold:.2f}",
-        (24, 86),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (220, 220, 220),
-        1,
-    )
-    cv2.putText(
-        frame,
-        f"FPS: {fps:.1f}",
-        (24, 108),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (220, 220, 220),
-        1,
-    )
-
+def draw_detections(frame, result):
+    """只在视频帧上绘制检测框和标签，不叠加任何信息条。"""
     class_counts = {}
     if result.boxes:
         for box in result.boxes:
@@ -152,18 +120,88 @@ def draw_overlay(frame, result, source, fps, conf_threshold):
                 color,
                 2,
             )
+    return class_counts
 
-    y_start = height - 70
-    cv2.rectangle(frame, (10, y_start), (width - 10, height - 10), (20, 20, 20), -1)
-    cv2.putText(frame, "Detected:", (24, y_start + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-    x = 120
-    for label, count in class_counts.items():
-        color = get_class_color(label)
-        cv2.putText(frame, f"{label}: {count}", (x, y_start + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        x += 110
+def create_info_panel(panel_height):
+    """创建深色背景的侧边信息面板。"""
+    panel = np.full((panel_height, PANEL_WIDTH, 3), PANEL_BG, dtype=np.uint8)
+    # 左侧亮色分隔线
+    cv2.line(panel, (0, 0), (0, panel_height - 1), PANEL_ACCENT, 2)
+    return panel
 
-    cv2.putText(frame, "q: quit  p: pause", (24, height - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+
+def draw_info_panel(panel, source, fps, conf_threshold, class_counts, paused):
+    """在侧边面板上绘制所有文字信息。"""
+    h = panel.shape[0]
+    x = 16
+    y = 0
+
+    # ── 标题 ──
+    y += 30
+    cv2.putText(panel, "Plant", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+    y += 30
+    cv2.putText(panel, "Recognition", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+    # 彩色下划线
+    y += 6
+    cv2.line(panel, (x, y), (x + 130, y), PANEL_ACCENT, 3)
+
+    # ── 分隔 ──
+    y += 24
+    cv2.line(panel, (x, y), (PANEL_WIDTH - 16, y), (60, 60, 80), 1)
+
+    # ── 状态指示 ──
+    y += 24
+    status_color = (80, 200, 255) if not paused else (80, 80, 255)
+    status_text = "LIVE" if not paused else "PAUSED"
+    cv2.putText(panel, f"Status: {status_text}", (x, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 2)
+
+    # ── 基本信息 ──
+    y += LINE_HEIGHT + 4
+    cv2.putText(panel, "Source", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, PANEL_DIM, 1)
+    y += LINE_HEIGHT - 4
+    # 长 URL 折行显示
+    src_display = source if len(source) <= 35 else source[:32] + "..."
+    cv2.putText(panel, src_display, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, PANEL_TEXT, 1)
+
+    y += LINE_HEIGHT + 4
+    cv2.putText(panel, "Confidence", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, PANEL_DIM, 1)
+    y += LINE_HEIGHT - 4
+    cv2.putText(panel, f">= {conf_threshold:.2f}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, PANEL_TEXT, 1)
+
+    y += LINE_HEIGHT + 4
+    cv2.putText(panel, "FPS", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, PANEL_DIM, 1)
+    y += LINE_HEIGHT - 4
+    fps_color = (100, 255, 100) if fps >= 15 else (100, 200, 255) if fps >= 8 else (100, 100, 255)
+    cv2.putText(panel, f"{fps:.1f}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, fps_color, 2)
+
+    # ── 分隔 ──
+    y += 18
+    cv2.line(panel, (x, y), (PANEL_WIDTH - 16, y), (60, 60, 80), 1)
+
+    # ── 检测统计 ──
+    y += 24
+    cv2.putText(panel, "Detected", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    if class_counts:
+        y += LINE_HEIGHT
+        for label, count in sorted(class_counts.items()):
+            color = get_class_color(label)
+            # 小色块
+            cv2.rectangle(panel, (x, y - 10), (x + 14, y + 2), color, -1)
+            cv2.putText(panel, f"{label}: {count}", (x + 22, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, PANEL_TEXT, 1)
+            y += LINE_HEIGHT
+    else:
+        y += LINE_HEIGHT
+        cv2.putText(panel, "(none)", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, PANEL_DIM, 1)
+
+    # ── 操作提示（固定在面板底部） ──
+    cv2.line(panel, (x, h - 56), (PANEL_WIDTH - 16, h - 56), (60, 60, 80), 1)
+    cv2.putText(panel, "Controls", (x, h - 44), cv2.FONT_HERSHEY_SIMPLEX, 0.4, PANEL_DIM, 1)
+    cv2.putText(panel, "Q - Quit", (x, h - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, PANEL_TEXT, 1)
+    cv2.putText(panel, "P - Pause/Play", (x + 100, h - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, PANEL_TEXT, 1)
 
 
 def run_inference(args):
@@ -189,13 +227,15 @@ def run_inference(args):
             print("实时识别已启动，按 'q' 键退出，按 'p' 暂停/继续...")
 
             paused = False
+            class_counts = {}
             start_time = time.time()
             frame_count = 0
             window_name = "Plant Recognition"
 
             if args.show:
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-                cv2.resizeWindow(window_name, 960, 720)
+
+            first_frame = True
 
             for result in results:
                 if not args.show:
@@ -212,9 +252,26 @@ def run_inference(args):
                 fps = frame_count / elapsed if elapsed > 0 else 0.0
 
                 if not paused:
-                    draw_overlay(frame, result, url, fps, args.conf)
+                    class_counts = draw_detections(frame, result)
 
-                cv2.imshow(window_name, frame)
+                # 缩放视频帧到目标高度，保持宽高比
+                h, w = frame.shape[:2]
+                scale = DISPLAY_HEIGHT / h
+                display_frame = cv2.resize(frame, (int(w * scale), DISPLAY_HEIGHT))
+
+                # 创建侧边信息面板（高度与缩放后的视频一致）
+                panel = create_info_panel(DISPLAY_HEIGHT)
+                draw_info_panel(panel, url, fps, args.conf, class_counts, paused)
+
+                # 拼接视频帧和面板
+                display = np.hstack([display_frame, panel])
+
+                if first_frame:
+                    dh, dw = display.shape[:2]
+                    cv2.resizeWindow(window_name, dw, dh)
+                    first_frame = False
+
+                cv2.imshow(window_name, display)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
